@@ -5,6 +5,7 @@ Mods for the [Herdr](https://herdr.dev) app.
 | Mod | What it does |
 |-----|--------------|
 | [agent-wall](agent-wall/) | One key turns every agent in the current space into a wall of panes, and back. |
+| [claude-usage](claude-usage/) | A foldable panel with the usage limits of your Claude accounts, and a red dot when one gets close. |
 
 ## Installing one
 
