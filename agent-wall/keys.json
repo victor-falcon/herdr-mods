@@ -1,0 +1,9 @@
+{
+  "global": {
+    "cmd-ctrl-shift-a": "agent-wall.toggle",
+    "ctrl-h": "agent-wall.left",
+    "ctrl-l": "agent-wall.right",
+    "ctrl-j": "agent-wall.down",
+    "ctrl-k": "agent-wall.up"
+  }
+}
