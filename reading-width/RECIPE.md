@@ -25,6 +25,10 @@ padding on both sides of the text.
   agent starting in a lone shell picks the right padding again.
 - An "agent" is a terminal whose program is a known agent or reports a status
   (`panes()[i].program.agent` or `panes()[i].status`).
+- While a terminal outside the tab has the keyboard (a floating window such
+  as a lazygit popup, a peek, a layout terminal block), the layout's padding
+  comes back, since every terminal shares it. Closing it narrows the agent
+  again. `focused()` reports that case as a `terminal` with no `pane`.
 - When the layout's tab block is gone (another mod, like agent-wall, swapped
   it for its own terminals), the layout's padding comes back.
 
@@ -89,8 +93,9 @@ padding on both sides of the text.
   of its own (an agent wall) can go over; have it replace the wrapper column
   instead and keep the 0px probe inside its own tree.
 - **Every terminal shares the padding.** Herdr has one `terminal_padding` per
-  layout, so a peek or floating terminal opened while a lone agent is shown
-  gets the wide padding too.
+  layout. The mod gives it back while a floating terminal has the keyboard,
+  but one shown without focus (a floating block that never takes the
+  keyboard) gets the wide padding.
 - The 0.6 cell ratio fits common monospace fonts (JetBrains Mono, Geist Mono,
   Cascadia). A wider or narrower font lands a few columns off 120.
 

@@ -79,6 +79,9 @@ export default class ReadingWidth extends View {
     if (!hasTabBlock(tree)) return null;
     const f = focused();
     if (!f) return undefined;
+    // A terminal outside the tab has the keyboard (a floating window, a peek,
+    // a layout terminal block): it shares the padding, so give it the layout's.
+    if (f.terminal && !f.pane) return null;
     const tab = panes().filter((p) => p.tab === f.tab);
     const shown = tab.find((p) => p.zoomed) ?? (tab.length === 1 ? tab[0] : null);
     if (!shown?.terminal || !(shown.program?.agent || shown.status)) return null;
