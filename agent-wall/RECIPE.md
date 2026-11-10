@@ -14,18 +14,24 @@ the agents on the wall and keep moving between panes everywhere else.
   of live terminals, one per agent of the focused space, from every tab, in
   space → tab → pane order. Everything around it (sidebar, tab bar, side
   panels) stays where it was.
-- The grid has at most 3 agents per row. Up to 3 agents share one row; more
-  are split into `ceil(n / 3)` rows as evenly as possible, wider rows last:
+- The grid follows the shape of the space it fills: a tall window stacks
+  agents, a wide one puts them side by side. It has at most 3 agents per row.
+  For n agents it tries 1 to `min(n, 3)` columns and picks the one whose cells
+  come closest to square on average (`|log(cell width / cell height)|`,
+  scoring each row as it is actually laid out). Rows are as even as possible,
+  wider rows last:
 
-  | Agents | Rows      |
-  |--------|-----------|
-  | 1–3    | 1, 2, 3   |
-  | 4      | 2 + 2     |
-  | 5      | 2 + 3     |
-  | 6      | 3 + 3     |
-  | 7      | 2 + 2 + 3 |
-  | 8      | 2 + 3 + 3 |
-  | 9      | 3 + 3 + 3 |
+  | Agents | 3 columns | 2 columns | 1 column  |
+  |--------|-----------|-----------|-----------|
+  | 2      | 2         | 2         | 1 + 1     |
+  | 3      | 3         | 1 + 2     | 1 + 1 + 1 |
+  | 4      | 2 + 2     | 2 + 2     | 4 rows    |
+  | 5      | 2 + 3     | 1 + 2 + 2 | 5 rows    |
+  | 7      | 2 + 2 + 3 | 1 + 2 + 2 + 2 | 7 rows |
+
+  On a landscape window 2 agents sit side by side and 3 share one row; on a
+  portrait one they stack. Before anything is measured, it uses as many
+  columns as fit a row.
 
 - Each cell copies the look of the tab block's pane frame (`main.content.pane`):
   its `background`, `border`, `focus` border, `radius` and `gap`, falling back
@@ -50,6 +56,8 @@ the agents on the wall and keep moving between panes everywhere else.
 - The wall shows the agents that existed when it opened; toggle it off and on
   to pick up new ones. Agent status changes show in the tab bar and sidebar
   as usual.
+- Resizing the window, folding the sidebar or opening a side panel re-arranges
+  a shown wall when a different column count fits better.
 - The original block is kept in shared state (`agent-wall.saved`), so a wall
   left on survives a restart and can still be toggled off.
 
@@ -63,6 +71,11 @@ the agents on the wall and keep moving between panes everywhere else.
   - **Launcher**: `mod.open:agent-wall` opens it as an invisible popup that
     toggles once and closes itself. Works without the navigator, but then
     there is no wall navigation.
+  - **Probe** (`props: { probe: "w" | "h" }`): two 0px blocks inside the wall
+    itself, one spanning its width and one its height. Each reports its size
+    with `on_size_change` into `setShared("agent-wall.size", { width, height })`;
+    a new size re-runs the column choice and, if it changed, rebuilds the wall
+    with `layout.set`.
 - **The layout change.** Add the navigator next to your tab bar as a 0px
   block, so a copy of the mod is always shown. Wrap the tab bar block in a row
   that takes over its `size` and `window_drag`:
@@ -89,10 +102,16 @@ the agents on the wall and keep moving between panes everywhere else.
   Keep your own tab bar's `content` and size. Any always-shown place works
   (not the sidebar if you hide it, nor a hidden node: key commands only reach
   shown copies). Don't put it in a row with a `gap`, or the gap shows.
-- Toggling on: reads `layout()`, saves the node with id `main` and the focused
-  pane in `setShared("agent-wall.saved", …)`, and calls `layout.set` with a
-  copy of the tree where `main` is a `column` (id `agent-wall`) of `row`s of
-  `{ "terminal": "<address>" }` blocks. Toggling off swaps the `agent-wall`
+- Toggling on: reads `layout()`, saves the node it replaces, the pane look and
+  the focused pane in `setShared("agent-wall.saved", { main, look, pane })`,
+  and calls `layout.set` with a copy of the tree where that node is a `row`
+  (id `agent-wall`) holding the height probe and a `column`
+  (`agent-wall-grid`, the width probe then `row`s of
+  `{ "terminal": "<address>" }` blocks). The node it replaces is `main`, or
+  the column or row wrapping `main` when its other children are only 0px
+  blocks (probes other mods keep beside the tab block, like reading-width's).
+  Those blocks go into the grid column so their mods keep running, and the
+  tree stays within `layout.set`'s 16 levels of nesting. Toggling off swaps the `agent-wall`
   node back for the saved one. Focus moves with
   `pane.focus { terminal }` / `pane.focus { pane }`.
 - Navigation reads the grid back from `layout()` and the current cell from
@@ -100,6 +119,7 @@ the agents on the wall and keep moving between panes everywhere else.
 - `herdr` functions: `agents`, `focused`, `layout`, `panes`, `run`, `shared`,
   `setShared`, `nextCommand`, `notify`, `props`, `closeOverlay`. Commands:
   `layout.set`, `pane.focus`, `pane.go`. No programs, no network, no files.
+  Probe sizes come from `on_size_change`.
 - `keys.json` binds `cmd-ctrl-shift-a` → `agent-wall.toggle` and
   `ctrl-h/l/j/k` → `agent-wall.left/right/down/up`.
 
@@ -111,6 +131,11 @@ the agents on the wall and keep moving between panes everywhere else.
   navigator block to the clone.
 - **Needs a block with id `main`** showing `{ "tab": "active" }`, as Herdr's
   `main` layout and its clones have. Otherwise toggling shows an error toast.
+- **Keep the wall shallow.** `layout.set` refuses arguments nested more than
+  16 levels, and a cell's focus border already sits deep in the tree. Wrapping
+  `main` in more containers (beyond one wrapper of 0px probes, which the wall
+  replaces) can push it over and show "a host argument may not nest more than
+  16 levels".
 - **Why `ctrl-hjkl` go through the mod:** `pane.go` doesn't move between
   layout terminal blocks, only between a tab's panes. Keys can't be
   conditional, so the navigator does it: grid moves on the wall, `pane.go`
@@ -128,8 +153,12 @@ the agents on the wall and keep moving between panes everywhere else.
 ## Done when
 
 - `herdr-app check ~/.config/herdr-app/mods/agent-wall` passes.
-- In a space with 4 agents in different tabs, `cmd-ctrl-shift-a` shows them
-  2 + 2; with 3 agents, one row of 3; with 5, 2 on top and 3 below.
+- On a landscape window, in a space with 4 agents in different tabs,
+  `cmd-ctrl-shift-a` shows them 2 + 2; with 3 agents, one row of 3; with 5,
+  2 on top and 3 below. Make the window tall and narrow and the same agents
+  stack in fewer columns.
+- With `main` wrapped in a column next to a 0px probe block, the wall opens
+  without errors and toggling off brings back the column as it was.
 - On the wall, `ctrl-h/l` move along a row and stop at the ends, and
   `ctrl-j/k` change rows (`herdr-app status` shows `focused_pane` as
   `agent-wall-<address>`).
