@@ -1,0 +1,5 @@
+{
+  "global": {
+    "cmd-enter": "mod.open:smart-split"
+  }
+}
