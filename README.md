@@ -6,6 +6,7 @@ Mods for the [Herdr](https://herdr.dev) app.
 |-----|--------------|
 | [agent-wall](agent-wall/) | One key turns every agent in the current space into a wall of panes, and back. |
 | [claude-usage](claude-usage/) | A foldable panel with the usage limits of your Claude accounts, and a red dot when one gets close. |
+| [reading-width](reading-width/) | An agent alone on screen keeps its text at about 120 columns, centered, instead of spanning the whole window. |
 
 ## Installing one
 
