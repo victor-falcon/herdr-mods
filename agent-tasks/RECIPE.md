@@ -1,0 +1,176 @@
+# Agent tasks
+
+A Herdr view of [`agent-tasks top`](https://github.com/victor-falcon/agent-tasks),
+the dashboard of the agent-tasks scheduler: a small foldable panel in the
+sidebar with the runner, today's results and the Running / Next / Recent runs,
+and a dashboard pane with the selected run's result, output, details,
+attempts, events and log, and buttons to retry it, run its task now or pause
+it. Folded, the panel is one line, `Agent tasks`, with a red dot when
+something needs you.
+
+![Agent tasks](preview.png)
+
+## What you see
+
+### The sidebar panel (a layout block, about 280px wide)
+
+- **Header** (26px, text 11.5px `dim`, 8px rounded hover in `hover`):
+  `Agent tasks` on the left, a chevron on the right (`chevron-down` open,
+  `chevron-right` folded). Clicking anywhere on it folds or unfolds the panel.
+  A 7px `ansi1` (red) dot sits left of the chevron when something needs
+  attention (the runner isn't healthy, or a run failed, was missed or is
+  blocked today): when folded, and always while the runner is stopped. A dim
+  `!` says the last refresh failed (hover it for why).
+- **Runner** (22px): a 7px dot (`ansi2` healthy, `ansi1` stopped), `Runner`
+  (12px `foreground`), a badge (10px `dim` on `hover`, radius 4) with
+  `every 5m` or `stopped`, and on the right (10.5px `dim`) `next 11:12`, or in
+  red how long ago the last tick was. Hover: the last tick's time.
+- **Stopped runner:** `Nothing starts until it's back. N slots past due.` and
+  a `Start runner in a new tab` button, which opens a Herdr tab running
+  `agent-tasks runner`.
+- **Today** (20px, 11px): `Today` in `dim` (44px), then `■ 3` (`ansi2`),
+  `× 1` (`ansi1`), `□ 0`, `! 0` (`ansi3` when above 0); zeros are `dim`.
+- **Running / Next / Recent:** each a 22px line (12px name, a count badge, a
+  small chevron) that folds its rows (shared, `agent-tasks.groups`). Up to 5
+  rows each, 20px, 11px: the status glyph (`◐` running in `ansi4`, `○` next,
+  `‖` paused, `■` ok in `ansi2`, `×` failed in `ansi1`, `!` blocked in `ansi3`,
+  `□` missed), the task id, and on the right (10.5px `dim`) the elapsed time
+  for a run in progress (`ansi4`), `in 23h` / `paused` for the next ones, the
+  time (`HH:MM`, else the weekday or the date) for recent ones. Hovering a
+  recent row shows its summary. Clicking a run opens the dashboard on it.
+- **Open dashboard** (11px `dim`, a panel icon): opens the dashboard pane
+  beside the focused pane, or focuses it if this tab has one.
+
+### The dashboard pane (`agent-tasks top`)
+
+- **Left (380px, a `border` line on its right):** the runner line, today's
+  counts spelled out (`3 ok`, `1 failed`, `0 missed`, `0 blocked`), then the
+  foldable Running / Next / Recent groups (26px `dim` headers with a count
+  badge and a chevron; rows 22px, 12px, with the machine in 10.5px `dim` and a
+  52px right column). The selected row has a `hover` background. At the
+  bottom, a foldable `Events · runner.log` list (the newest first; 20px rows,
+  11px: time, glyph, text; hover for the whole line).
+- **Right: the selected run.** Its glyph, the task id (14px semibold), a
+  status badge (10.5px, the status color on `hover`), and ghost buttons
+  (26px, 11.5px `dim`, icon, label and key): **Terminal** (`a`), **Retry**
+  (`r`), **Run now** (`R`), **Pause** / **Resume** (`p`). Below, 11.5px `dim`:
+  `Started 10:57 · 11m · attempt 2/2 · wsl · herdr t38`.
+- Then foldable sections (26px headers: the name in `foreground` 500, what is
+  inside in `dim`, a chevron), the same as `agent-tasks top`'s run view:
+  **Result** (status, slot, how long, and the agent's summary) and **Output**
+  (the file passed to `finish --output-file`) open when there is a result;
+  **Details**, **Attempts**, **Events** folded; **Log** (the last 400 lines)
+  open when there is no result. Result and Output are sans 13px; the others
+  mono 11.5px on a `raised` background, radius 6.
+- Selecting a task in Next shows the task (title, schedule, next run,
+  machine) with Run now and Pause.
+- An action shows a strip at the bottom with the command it ran and `done`,
+  or the error in `ansi1`.
+- Keys, once the pane has the keyboard (click it): `j`/`k` (or the arrows)
+  move, `g`/`G` first/last, `a` `r` `R` `p` the actions.
+
+### States
+
+- **Runner stopped:** the red dot and the message and button above.
+- **No tasks yet:** `Nothing scheduled yet. Ask an agent:` and an example.
+- **CLI not found** (`agent-tasks` isn't on the login PATH): `agent-tasks
+  isn't on your login PATH`, `In its checkout: bin/agent-tasks install`, and a dim `!` in the header.
+- **Refresh failed:** a dim `!` in the header (hover: the error), a one-line
+  `ansi3` message, and the last good data at 55% opacity.
+- **Unknown schema** (a newer agent-tasks): the same banner, asking to update
+  the mod.
+
+Only theme colors (`foreground`, `dim`, `hover`, `border`, `raised`, `ansi1`
+to `ansi4`), so light and dark themes both work.
+
+## How it behaves
+
+- One call reads everything: `agent-tasks top --json`. The snapshot is shared
+  (`agent-tasks.snapshot`, with `agent-tasks.fetchedAt`), so the panel and the
+  pane don't each run it.
+- It is read again when something changes in the data folder (`watchFolder`
+  on the `data_dir` that `top --json` reports, else
+  `~/.local/share/agent-tasks`; changes are read after 0.7 s of quiet), every
+  minute (relative times and the runner's health move on their own), and
+  after an action. On another machine, where folders can't be watched, every
+  15 seconds.
+- The selected run is read with `agent-tasks log <ref> --json` (events,
+  attempts, the captured log) and `agent-tasks show <task> --json` (title,
+  folder, retries), again when it changes, and every minute while it runs.
+  The only file read directly is the run's output file, at the path the CLI
+  gives (relative ones are under its data folder).
+- Actions are the CLI's own commands: `agent-tasks retry <ref>` (failed,
+  timed-out and missed runs), `agent-tasks run <task>`, `agent-tasks
+  pause|resume <task>`. **Terminal**, for a run whose session is still open:
+  when the herdr launcher started it and its terminal is alive, focuses its
+  pane (or peeks at it if it has none); else opens a tab running `agent-tasks
+  attach <ref>`.
+- The folded state (`agent-tasks.folded`) and the groups' (`agent-tasks.groups`,
+  `agent-tasks.paneGroups`) are shared and survive restarts.
+- With `props.block` set, the block resizes itself to the panel's height
+  (`layout.resize`), so folding gives the room back to the blocks above.
+- Command **`agent-tasks.toggle`** opens the dashboard in the focused tab, or
+  closes it if that tab has one. No key is bound: add a palette entry or bind
+  `agent-tasks.toggle` in `keys.json` (`"cmd-shift-t": "agent-tasks:toggle"`)
+  if you want one. The sidebar block handles it, so it needs the block in the
+  shown layout.
+
+## Built from
+
+- One mod, `mods/agent-tasks/`:
+  - `panel.js`: everything (reading the CLI, the sidebar panel, the dashboard
+    pane, the actions), with no Herdr state of its own beyond shared keys.
+  - `main.js`: draws the panel as a layout block (keeping the block's height
+    in step, and handling `agent-tasks.toggle`) or, with `view: "dashboard"`,
+    the pane.
+  - `chevron-right.svg`, `chevron-down.svg`, `panel-right.svg`,
+    `terminal.svg`, `rotate-ccw.svg`, `play.svg`, `pause.svg` (Lucide).
+- `top --json` gives `runner` (`state`: healthy, stale or never; `every`,
+  `last_tick`, `next_tick`), `running`, `next`, `recent` (each run with `ref`,
+  `task_id`, `status`, `attempt`, `started_at`, `at`, `summary`, `handle`,
+  `machine`), `today`, `events` (the end of `runner.log`), `errors`, `schema`
+  and, in newer versions, `data_dir`.
+- The layout: a block in a column, under whatever fills the rest of it:
+
+  ```json
+  { "id": "agent-tasks", "type": "block", "size": { "px": 32 },
+    "content": { "mod": "agent-tasks", "props": {
+      "block": "agent-tasks",
+      "machine": "wsl" } } }
+  ```
+
+  `block` must be the block's own `id`. `machine` is the Herdr machine
+  (`hc machine ls`, a space's `machine`) where agent-tasks and its runner
+  live; leave it out when that is this computer. The pane it opens gets
+  `{ "view": "dashboard", "run": "<ref>", "machine": … }`.
+
+## What it runs and reads
+
+- Runs your `agent-tasks` CLI (on `machine` through herdr-core when set):
+  `top --json` on changes and every minute, `log` and `show` for the run you
+  look at, and the action you click. Nothing else, and no network requests
+  of its own.
+- Reads a run's output file, at the path the CLI gives.
+
+## Watch out
+
+- Herdr starts programs with your login environment: `agent-tasks` must be on
+  that PATH (`bin/agent-tasks install` in its checkout links it there).
+- Retry, Run now and Start runner launch agents and terminals right away, the
+  same as typing the command.
+- Folders on another machine can't be watched: there it reads every 15 s.
+- A block's height is fixed in the layout; that's why the mod resizes its own
+  block, and why it needs its id in `props.block`.
+- Asset paths are `mods/agent-tasks/...`: install the folder under that name,
+  by copying (a symlink out of Herdr's home draws blank icons).
+
+## Done when
+
+- `herdr-app check ~/.config/herdr-app/mods/agent-tasks` passes.
+- The panel shows the same runner state, counts and runs as
+  `agent-tasks top`.
+- Clicking the header folds it and the block shrinks to the header; a failed
+  run today, or a stopped runner, shows the red dot.
+- Clicking a run opens the dashboard on it; Retry on a failed run starts a
+  new attempt and the strip says `done`.
+- Running `agent-tasks.toggle` twice opens and closes the dashboard.
