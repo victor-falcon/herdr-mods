@@ -123,6 +123,17 @@ to `ansi4`), so light and dark themes both work.
   `agent-tasks.toggle` in `keys.json` (`"cmd-shift-t": "agent-tasks.toggle"`)
   if you want one. The sidebar block handles it, so it needs the block in the
   shown layout.
+- The block is optional. The pane works on its own: a palette entry can open
+  it with `run("pane.split", { direction: "right", pane: <focused pane>,
+  mod: "agent-tasks", props: { view: "dashboard" } })`. It reads the CLI
+  itself and opens on the first run in progress, else the latest result.
+- **Where agent-tasks runs.** `props.machine` wins when set. Otherwise the mod
+  looks once, the first time it reads: this computer if `agent-tasks version`
+  works here, else the first ready machine (`machines()`) where it does.
+  The choice is kept in `agent-tasks.machine`, shared by every copy, so the
+  block and the pane agree. If that machine later says the CLI is missing,
+  or can't be reached, the mod looks again on its next read. Found nowhere:
+  the CLI-not-found state, and it looks again a minute later.
 
 ## Built from
 
@@ -144,21 +155,22 @@ to `ansi4`), so light and dark themes both work.
   ```json
   { "id": "agent-tasks", "type": "block", "size": { "px": 32 },
     "content": { "mod": "agent-tasks", "props": {
-      "block": "agent-tasks",
-      "machine": "wsl" } } }
+      "block": "agent-tasks" } } }
   ```
 
-  `block` must be the block's own `id`. `machine` is the Herdr machine
-  (`hc machine ls`, a space's `machine`) where agent-tasks and its runner
-  live; leave it out when that is this computer. The pane it opens gets
-  `{ "view": "dashboard", "run": "<ref>", "machine": … }`.
+  `block` must be the block's own `id`. Add `"machine": "<name>"` (the
+  Herdr machine, a space's `machine`) only to pin where agent-tasks runs;
+  left out, it is found as above. The pane it opens gets
+  `{ "view": "dashboard", "run": "<ref>" }`, plus `machine` when pinned.
 
 ## What it runs and reads
 
-- Runs your `agent-tasks` CLI (on `machine` through herdr-core when set):
-  `top --json` on changes and every minute, `log` and `show` for the run you
-  look at, and the action you click. Nothing else, and no network requests
-  of its own.
+- Runs your `agent-tasks` CLI (on the chosen machine through herdr-core):
+  `version` while looking for it (here, then on each ready machine), `top
+  --json` on changes and every minute, `log` and `show` for the run you look
+  at, and the action you click. It also runs `test -d` to check that the
+  data folder exists here before watching it. Nothing else, and no network
+  requests of its own.
 - Reads a run's output file, at the path the CLI gives.
 
 ## Watch out
@@ -184,3 +196,7 @@ to `ansi4`), so light and dark themes both work.
 - Clicking a run opens the dashboard on it; Retry on a failed run starts a
   new attempt and the strip says `done`.
 - Running `agent-tasks.toggle` twice opens and closes the dashboard.
+- With no `machine` prop and agent-tasks only on another connected machine,
+  the panel finds it and shows its data.
+- `pane.split` with `{ mod: "agent-tasks", props: { view: "dashboard" } }`
+  and no block in the layout opens a working dashboard.

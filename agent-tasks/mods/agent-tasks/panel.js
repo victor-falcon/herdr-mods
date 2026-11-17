@@ -10,7 +10,7 @@
 
 import { div, svg } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
-import { exec, home, readTextFile, watchFolder, shared, setShared, run, panes, focused, spaces, terminals } from "herdr";
+import { exec, home, readTextFile, watchFolder, shared, setShared, run, panes, focused, spaces, terminals, machines } from "herdr";
 
 const SNAP_KEY = "agent-tasks.snapshot"; // { dash, at, error, missing, schema, machine }
 const FETCHED_KEY = "agent-tasks.fetchedAt"; // ms of the last `top --json` any copy started
@@ -18,6 +18,7 @@ const FOLDED_KEY = "agent-tasks.folded"; // the sidebar panel
 const GROUPS_KEY = "agent-tasks.groups"; // { [group]: true } folded groups in the sidebar
 const PANE_GROUPS_KEY = "agent-tasks.paneGroups"; // the same in the dashboard pane
 const SELECT_KEY = "agent-tasks.select"; // { ref, at }: the sidebar asks the pane to show a run
+const MACHINE_KEY = "agent-tasks.machine"; // { machine }: where agent-tasks was found (no props.machine)
 
 const MOD = "agent-tasks";
 const SCHEMA = 1;
@@ -40,9 +41,33 @@ const LOG_LINES = 400;
 // ---------------------------------------------------------------------------
 
 // props: { machine } — the Herdr machine (a space's `machine`) agent-tasks
-// runs on; left out, this computer.
+// runs on. Left out, the machine found by `findMachine` (shared by every
+// copy): this computer if agent-tasks runs here, else the first connected
+// machine where it does.
+// -> { machine, fixed: set in props, known: decided (else still looking), dir }
 export function tasksOptions(p, dir) {
-  return { machine: typeof p?.machine === "string" && p.machine ? p.machine : null, dir };
+  const fixed = typeof p?.machine === "string" && p.machine ? p.machine : null;
+  if (fixed) return { machine: fixed, fixed: true, known: true, dir };
+  const found = shared(MACHINE_KEY);
+  return { machine: found?.machine ?? null, fixed: false, known: Boolean(found), dir };
+}
+
+const answers = async (on) => {
+  try {
+    return (await exec("agent-tasks", ["version"], on ? { on } : undefined)).code === 0;
+  } catch {
+    return false;
+  }
+};
+
+// Looks for agent-tasks here, then on each ready machine, and remembers the
+// first that answers. Found nowhere: nothing is remembered (this computer is
+// used, which says the CLI is missing) and the next read looks again.
+async function findMachine() {
+  if (await answers(null)) return setShared(MACHINE_KEY, { machine: null });
+  for (const m of machines()) {
+    if (m.name && m.layout === "ready" && (await answers(m.name))) return setShared(MACHINE_KEY, { machine: m.name });
+  }
 }
 
 const onMachine = (o) => (o.machine ? { on: o.machine } : undefined);
@@ -128,7 +153,12 @@ export function startTasks(cx, options) {
     setShared(FETCHED_KEY, Date.now());
     cx.spawn(async (cx) => {
       try {
-        await fetchDashboard(options());
+        if (!options().known) await findMachine();
+        const o = options();
+        await fetchDashboard(o);
+        // The machine found earlier lost agent-tasks (or went away): look again next time.
+        const st = snapshot(o);
+        if (!o.fixed && o.known && (st?.missing || /unreachable|offline|not connected/i.test(st?.error ?? ""))) setShared(MACHINE_KEY, null);
       } finally {
         busy = false;
       }
@@ -164,7 +194,7 @@ export function startTasks(cx, options) {
     });
   };
   const o = options();
-  if (!snapshot(o)?.dash || sinceFetch() > 10000) refresh(cx);
+  if (!o.known || !snapshot(o)?.dash || sinceFetch() > 10000) refresh(cx);
   else watch(cx);
   cx.timer.every(500, (cx) => {
     if (busy) return;
@@ -335,7 +365,7 @@ export function showDashboard(o, ref = null) {
   if (ref) setShared(SELECT_KEY, { ref, at: Date.now() });
   const here = dashboardPane(f.tab);
   if (here) return run("pane.focus", { pane: here.pane });
-  run("pane.split", { direction: "right", ...(f.pane ? { pane: f.pane } : {}), mod: MOD, props: { view: "dashboard", run: ref, machine: o.machine } });
+  run("pane.split", { direction: "right", ...(f.pane ? { pane: f.pane } : {}), mod: MOD, props: { view: "dashboard", run: ref, ...(o.fixed ? { machine: o.machine } : {}) } });
 }
 
 // `agent-tasks.toggle`: opens the dashboard in the focused tab, or closes it.
@@ -1087,6 +1117,7 @@ function rightColumn(t, view, st, now, refresh) {
 // reads the CLI when the run changed in the snapshot or was selected).
 export function startDashboard(cx, view) {
   const step = (cx) => {
+    if (!view.o.known) return;
     const dash = snapshot(view.o)?.dash;
     if (view.takeSelection()) cx.notify();
     if (dash) view.sync(cx, dash);
