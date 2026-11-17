@@ -37,7 +37,8 @@ something needs you.
   `□` missed), the task id, and on the right (10.5px `dim`) the elapsed time
   for a run in progress (`ansi4`), `in 23h` / `paused` for the next ones, the
   time (`HH:MM`, else the weekday or the date) for recent ones. Hovering a
-  recent row shows its summary. Clicking a run opens the dashboard on it.
+  recent row shows its summary. Clicking a run opens the dashboard on it. A
+  group with more rows ends in `+N more in the dashboard`.
 - **Open dashboard** (11px `dim`, a panel icon): opens the dashboard pane
   beside the focused pane, or focuses it if this tab has one.
 
@@ -64,6 +65,9 @@ something needs you.
   mono 11.5px on a `raised` background, radius 6.
 - Selecting a task in Next shows the task (title, schedule, next run,
   machine) with Run now and Pause.
+- **Retry** and **Run now** start an agent, so the first press turns the
+  button into `Confirm retry` / `Confirm run now` (`ansi3`) for 4 seconds
+  and the second one runs it. A disabled button says why on hover.
 - An action shows a strip at the bottom with the command it ran and `done`,
   or the error in `ansi1`.
 - Keys, once the pane has the keyboard (click it): `j`/`k` (or the arrows)
@@ -79,6 +83,8 @@ something needs you.
   `ansi3` message, and the last good data at 55% opacity.
 - **Unknown schema** (a newer agent-tasks): the same banner, asking to update
   the mod.
+- **Unreadable files** (`errors` in `top --json`): `N files couldn't be read`,
+  with the CLI's messages on hover.
 
 Only theme colors (`foreground`, `dim`, `hover`, `border`, `raised`, `ansi1`
 to `ansi4`), so light and dark themes both work.
@@ -89,8 +95,10 @@ to `ansi4`), so light and dark themes both work.
   (`agent-tasks.snapshot`, with `agent-tasks.fetchedAt`), so the panel and the
   pane don't each run it.
 - It is read again when something changes in the data folder (`watchFolder`
-  on the `data_dir` that `top --json` reports, else
-  `~/.local/share/agent-tasks`; changes are read after 0.7 s of quiet), every
+  on the `data_dir` that `top --json` reports; older CLIs don't, so the folder
+  the runner's start line in `runner.log` names, else
+  `~/.local/share/agent-tasks`), after 0.7 s of quiet and at most every 1.5 s
+  (appends to a run's captured log are ignored), every
   minute (relative times and the runner's health move on their own), and
   after an action. On another machine, where folders can't be watched, every
   15 seconds.
@@ -111,7 +119,7 @@ to `ansi4`), so light and dark themes both work.
   (`layout.resize`), so folding gives the room back to the blocks above.
 - Command **`agent-tasks.toggle`** opens the dashboard in the focused tab, or
   closes it if that tab has one. No key is bound: add a palette entry or bind
-  `agent-tasks.toggle` in `keys.json` (`"cmd-shift-t": "agent-tasks:toggle"`)
+  `agent-tasks.toggle` in `keys.json` (`"cmd-shift-t": "agent-tasks.toggle"`)
   if you want one. The sidebar block handles it, so it needs the block in the
   shown layout.
 

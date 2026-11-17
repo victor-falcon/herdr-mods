@@ -16,7 +16,7 @@
 
 import { View, div } from "gpui-kit";
 import { props, theme, layout, run, nextCommand } from "herdr";
-import { tasksOptions, tasksPanel, panelHeight, startTasks, toggleDashboard, Dashboard, dashboardPaneView } from "./panel.js";
+import { tasksOptions, tasksPanel, panelHeight, startTasks, toggleDashboard, Dashboard, startDashboard, dashboardPaneView } from "./panel.js";
 
 const DIR = "mods/agent-tasks";
 
@@ -37,6 +37,7 @@ export default class AgentTasks extends View {
     this.tasks = startTasks(cx, options);
     if (isPane()) {
       this.dashboard = new Dashboard(options(), props()?.run ?? null);
+      startDashboard(cx, this.dashboard);
       this.handle = cx.focus_handle();
       // Take the keyboard when it opens, so j/k and the action keys work.
       cx.timer.after(50, () => this.handle.focus());
@@ -59,7 +60,7 @@ export default class AgentTasks extends View {
     if (node && node.size?.px !== px) run("layout.resize", { id, px });
   }
 
-  render(cx) {
+  render() {
     const t = theme();
     if (isPane()) {
       const view = this.dashboard;
@@ -68,7 +69,7 @@ export default class AgentTasks extends View {
         .track_focus(this.handle)
         .on_mouse_down("left", () => this.handle.focus())
         .on_key_down((event, cx) => view.key(event, cx, this.tasks.refresh))
-        .child(dashboardPaneView(t, view, cx, this.tasks.refresh));
+        .child(dashboardPaneView(t, view, this.tasks.refresh));
     }
     const o = options();
     this.fit(o);

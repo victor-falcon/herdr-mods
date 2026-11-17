@@ -29,6 +29,8 @@ const MINUTE = 60000;
 const DEBOUNCE_MS = 700;
 // Without a watcher (another machine, or the watch failed): read this often.
 const POLL_MS = 15000;
+// Never read more often than this, whatever changes.
+const MIN_GAP_MS = 1500;
 const MONO = "JetBrains Mono";
 // Rows a group shows in the sidebar; the dashboard has the rest.
 const SIDEBAR_ROWS = 5;
@@ -55,8 +57,9 @@ async function cli(o, args) {
   try {
     r = await exec("agent-tasks", [...args, "--json"], onMachine(o));
   } catch (e) {
+    // exec rejects when the program can't start: for a bare name, it isn't on PATH.
     const message = String(e?.message ?? e);
-    return /not found|no such file|enoent|cannot find/i.test(message) ? { missing: true, error: message } : { error: message };
+    return /not found|no such file|enoent/i.test(message) ? { missing: true, error: message } : { error: message };
   }
   if (r.code === 127) return { missing: true, error: "agent-tasks not found" };
   let json = null;
@@ -65,7 +68,12 @@ async function cli(o, args) {
   } catch {
     // Not JSON: the error is in stderr.
   }
-  if (r.code !== 0) return { error: String(json?.error?.message ?? (r.stderr.trim() || `agent-tasks exited with ${r.code}`)) };
+  if (r.code !== 0) {
+    // `retry` and `run` exit 1 when the launch failed, with the reason in a `failed` event.
+    const failed = (json?.events ?? []).find((e) => e?.type === "failed");
+    const reason = json?.error?.message ?? failed?.message ?? failed?.reason ?? (r.stderr.trim() || `agent-tasks exited with ${r.code}`);
+    return { error: String(reason), json };
+  }
   if (!json) return { error: "agent-tasks printed no JSON" };
   return { json };
 }
@@ -78,7 +86,6 @@ export function snapshot(o) {
 // Reads `top --json` into the shared snapshot. A failure keeps the last good
 // dashboard and says why.
 async function fetchDashboard(o) {
-  setShared(FETCHED_KEY, Date.now());
   const r = await cli(o, ["top"]);
   const prev = snapshot(o);
   const base = { dash: prev?.dash ?? null, at: prev?.at ?? null, machine: o.machine, error: null, missing: false, schema: null };
@@ -91,11 +98,20 @@ async function fetchDashboard(o) {
 
 const sinceFetch = () => Date.now() - (Number(shared(FETCHED_KEY)) || 0);
 
+// The CLI's data folder: `data_dir` in `top --json` (newer CLIs), else what
+// the runner's start line in `runner.log` says (`… · data: ~/…`), else the
+// default. `~` only means something on this computer.
 export function dataDir(o) {
-  const d = snapshot(o)?.dash?.data_dir;
-  if (typeof d === "string" && d) return d;
-  return o.machine ? null : expandHome(DEFAULT_DATA_DIR);
+  const dash = snapshot(o)?.dash;
+  if (typeof dash?.data_dir === "string" && dash.data_dir) return dash.data_dir;
+  const said = (dash?.events ?? []).map((l) => / · data: (\S+)\s*$/.exec(l)?.[1]).filter(Boolean).at(-1);
+  const dir = said ?? DEFAULT_DATA_DIR;
+  if (!dir.startsWith("~")) return dir;
+  return o.machine ? null : expandHome(dir);
 }
+
+// Appends to a run's captured log change nothing `top` shows.
+const relevant = (paths) => !Array.isArray(paths) || paths.length === 0 || paths.some((p) => !/\/runs\/.+\.log$/.test(p));
 
 // Keeps the snapshot fresh: on changes in the data folder (debounced), every
 // minute (relative times and the runner's health move on their own), and on
@@ -104,10 +120,13 @@ export function startTasks(cx, options) {
   let busy = false;
   let changedAt = 0; // a change seen and not read yet
   let watching = false;
+  // Claims the read through the shared clock before anything is awaited, so
+  // two copies don't both run the CLI.
   const refresh = (cx) => {
-    if (busy) return;
+    if (busy || sinceFetch() < MIN_GAP_MS) return;
     busy = true;
     changedAt = 0;
+    setShared(FETCHED_KEY, Date.now());
     cx.spawn(async (cx) => {
       try {
         await fetchDashboard(options());
@@ -126,8 +145,8 @@ export function startTasks(cx, options) {
     cx.spawn(async () => {
       try {
         for (;;) {
-          await watchFolder(dataDir(options()) ?? dir);
-          changedAt = Date.now();
+          const paths = await watchFolder(dataDir(options()) ?? dir);
+          if (relevant(paths)) changedAt = Date.now();
         }
       } catch {
         watching = false; // fall back to polling
@@ -157,7 +176,6 @@ export function startTasks(cx, options) {
 // ---------------------------------------------------------------------------
 
 const IN_PROGRESS = ["running", "blocked"];
-const FAILURE = ["failed", "timed_out"];
 const RETRYABLE = ["failed", "timed_out", "missed"];
 
 const pad2 = (n) => String(n).padStart(2, "0");
@@ -177,7 +195,7 @@ export function clock(ms, seconds = false) {
 }
 
 // `14:05` today, `Mon 14:05` this week, else `17/11 14:05`.
-function when(ms, now) {
+function formatWhen(ms, now) {
   if (sameDay(ms, now)) return clock(ms);
   const d = new Date(ms);
   return Math.abs(now - ms) < 6 * 86400000 ? `${DAYS[d.getDay()]} ${clock(ms)}` : `${pad2(d.getDate())}/${pad2(d.getMonth() + 1)} ${clock(ms)}`;
@@ -253,8 +271,28 @@ function banners(st) {
   if (st?.missing) return [{ kind: "warn", text: "agent-tasks isn't on your login PATH." }, { kind: "info", text: "In its checkout: bin/agent-tasks install", mono: true }];
   if (st?.schema != null) return [{ kind: "warn", text: `agent-tasks speaks schema ${st.schema}: update this mod.` }];
   if (st?.error) return [{ kind: "warn", text: `Couldn't refresh: ${st.error}`, tip: st.error }];
+  // Task or run files the CLI couldn't read (`top` says the same).
+  const errors = st?.dash?.errors ?? [];
+  if (errors.length) return [{ kind: "warn", text: `${plural(errors.length, "file")} couldn't be read`, tip: errors.join("\n") }];
   return [];
 }
+
+// The groups both views list, in order.
+const GROUPS = [
+  { id: "running", name: "Running" },
+  { id: "next", name: "Next" },
+  { id: "recent", name: "Recent" },
+];
+
+const EMPTY_HINT = ["Nothing scheduled yet. Ask an agent:", "“Every Monday at 9, sum up my open PRs.”"];
+
+function stoppedNote(dash) {
+  const due = pastDue(dash);
+  return `Nothing starts until it's back.${due ? ` ${plural(due, "slot")} past due.` : ""}`;
+}
+
+const taskIdOf = (ref) => String(ref).split("/")[0];
+const lastAttempt = (run) => run?.attempts?.at(-1) ?? null;
 
 const headerProblem = (st) => (st?.missing ? "agent-tasks not found" : st?.schema != null ? `Unknown schema ${st.schema}` : st?.error ?? null);
 
@@ -336,13 +374,7 @@ function bannerLine(t, b, h, size, id) {
 // Fixed sizes, so the block can be sized to the panel exactly.
 const HEADER = 26, RUNNER = 22, TODAY = 20, GROUP = 22, ROW = 20, LINE = 20, BUTTON = 26, OPEN = 24, PAD_TOP = 6, PAD_BOTTOM = 4;
 
-function sidebarGroups(dash) {
-  return [
-    { id: "running", name: "Running", items: dash.running ?? [] },
-    { id: "next", name: "Next", items: dash.next ?? [] },
-    { id: "recent", name: "Recent", items: dash.recent ?? [] },
-  ].filter((g) => g.items.length > 0);
-}
+const withItems = (dash, items) => GROUPS.map((g) => ({ ...g, items: items(g.id) })).filter((g) => g.items.length > 0);
 
 // The lines of the open panel, each { h, draw(t, o, now) }: the height is
 // worked out from the same list that draws it.
@@ -357,21 +389,26 @@ function sidebarLines(o, st) {
     const wrap = (line) => ({ h: line.h, draw: (...a) => line.draw(...a).when(dim, (el) => el.opacity(0.55)) });
     lines.push(wrap({ h: RUNNER, draw: (t, o, now) => runnerLine(t, dash, now, { h: RUNNER, size: 12 }) }));
     if (stopped(dash)) {
-      const due = pastDue(dash);
       lines.push(wrap({ h: LINE, draw: (t) => div().h(LINE).px(10).flex().items_center().text_size(11).text_color(t.dim)
-        .child(div().min_w(0).truncate().child(`Nothing starts until it's back.${due ? ` ${due} slot${due === 1 ? "" : "s"} past due.` : ""}`)) }));
+        .child(div().min_w(0).truncate().child(stoppedNote(dash))) }));
       lines.push(wrap({ h: BUTTON, draw: (t, o) => runnerButton(t, o, "agent-tasks-start-runner") }));
     }
     lines.push(wrap({ h: TODAY, draw: (t) => todayLine(t, dash, false) }));
     if (isEmpty(dash)) {
-      lines.push({ h: LINE, draw: (t) => div().h(LINE).px(10).flex().items_center().text_size(11).text_color(t.dim).child("Nothing scheduled yet. Ask an agent:") });
+      lines.push({ h: LINE, draw: (t) => div().h(LINE).px(10).flex().items_center().text_size(11).text_color(t.dim).child(EMPTY_HINT[0]) });
       lines.push({ h: LINE, draw: (t) => div().h(LINE).px(10).flex().items_center().text_size(11).text_color(t.foreground)
-        .child(div().min_w(0).truncate().child("“Every Monday at 9, sum up my open PRs.”")) });
+        .child(div().min_w(0).truncate().child(EMPTY_HINT[1])) });
     }
-    for (const g of sidebarGroups(dash)) {
+    for (const g of withItems(dash, (id) => dash[id] ?? [])) {
       const open = !isFolded(GROUPS_KEY, g.id);
       lines.push(wrap({ h: GROUP, draw: (t, o) => groupLine(t, o, g, open) }));
-      if (open) for (const item of g.items.slice(0, SIDEBAR_ROWS)) lines.push(wrap({ h: ROW, draw: (t, o, now) => sidebarRow(t, o, g.id, item, now) }));
+      if (!open) continue;
+      for (const item of g.items.slice(0, SIDEBAR_ROWS)) lines.push(wrap({ h: ROW, draw: (t, o, now) => sidebarRow(t, o, g.id, item, now) }));
+      const more = g.items.length - SIDEBAR_ROWS;
+      if (more > 0) lines.push(wrap({ h: ROW, draw: (t, o) => h_flex().id(`agent-tasks-more-${g.id}`).h(ROW).px(10).pl(27).items_center().rounded(6).cursor_pointer()
+        .text_size(10.5).text_color(t.dim).hover((s) => s.bg(t.hover).text_color(t.foreground))
+        .on_click(() => showDashboard(o))
+        .child(`+${more} more in the dashboard`) }));
     }
   }
   lines.push({ h: OPEN, draw: (t, o) => h_flex().id("agent-tasks-open").h(OPEN).px(10).gap(7).items_center().rounded(6).cursor_pointer()
@@ -392,7 +429,7 @@ function runnerLine(t, dash, now, { h, size }) {
   const healthy = r.state === "healthy";
   const last = parse(r.last_tick);
   const next = parse(r.next_tick);
-  const tip = last ? `Last tick ${when(last, now)}:${pad2(new Date(last).getSeconds())}` : "The runner has never ticked";
+  const tip = last ? `Last tick ${formatWhen(last, now)}:${pad2(new Date(last).getSeconds())}` : "The runner has never ticked";
   const right = healthy ? (next ? `next ${clock(next)}` : "") : last ? `${span(now - last)} ago` : "never ran";
   return h_flex().id("agent-tasks-runner").h(h).px(10).gap(7).items_center().tooltip(tip)
     .child(dot(healthy ? t.ansi2 : t.ansi1))
@@ -438,7 +475,9 @@ function groupLine(t, o, g, open) {
 function rowRight(t, group, item, now) {
   if (group === "running") {
     const start = parse(item.started_at) ?? parse(item.slot);
-    return { text: item.status === "blocked" ? "blocked" : start ? span(now - start) : "", color: item.status === "blocked" ? t.ansi3 : t.ansi4 };
+    // Minutes: the list redraws once a minute.
+    const elapsed = start ? (now - start < MINUTE ? "<1m" : span(now - start)) : "";
+    return { text: item.status === "blocked" ? "blocked" : elapsed, color: item.status === "blocked" ? t.ansi3 : t.ansi4 };
   }
   if (group === "next") return { text: item.state === "paused" ? "paused" : inTime((parse(item.at) ?? now) - now), color: t.dim };
   return { text: shortWhen(parse(item.at) ?? now, now), color: t.dim };
@@ -492,7 +531,7 @@ export function tasksPanel(t, o) {
 // Result and Output open when there is a result; Log open when there isn't.
 function sectionsOf(detail, dash, now) {
   const { log, run, task, output, dataDir } = detail;
-  const last = run.attempts?.at(-1);
+  const last = lastAttempt(run);
   const inProgress = IN_PROGRESS.includes(run.status);
   const neverStarted = !run.attempts?.length || run.status === "missed";
   const started = parse(last?.started_at);
@@ -502,7 +541,7 @@ function sectionsOf(detail, dash, now) {
 
   const facts = [
     `${statusWord(run.status)}${run.reason ? ` (${run.reason})` : ""}`,
-    `slot ${when(parse(run.slot) ?? now, now)}`,
+    `slot ${formatWhen(parse(run.slot) ?? now, now)}`,
     ...(took !== null ? [`${inProgress ? "running for" : "took"} ${span(took)}`] : []),
     ...(run.attempts?.length > 1 ? [`attempt ${run.attempts.length}`] : []),
   ].join(" · ");
@@ -522,13 +561,13 @@ function sectionsOf(detail, dash, now) {
 
   const nextInfo = findTask(dash, run.task_id);
   const rows = [
-    ["Task", task ? `${task.id} — ${task.title}` : `${run.task_id} (removed)`],
+    ["Task", task ? `${task.id} — ${task.title}` : `${run.task_id} (${detail.taskError ? `couldn't read it: ${detail.taskError}` : "removed"})`],
     ...(task ? [["Folder", task.cwd], ["Schedule", nextInfo?.schedule ?? scheduleText(task.schedule)]] : []),
-    ["Slot", when(parse(run.slot) ?? now, now)],
+    ["Slot", formatWhen(parse(run.slot) ?? now, now)],
     ...(last ? [["Attempts", `${run.attempts.length}${task ? ` of ${(detail.retries ?? task.retries ?? 0) + 1}` : ""}`]] : []),
     ["Run ref", detail.ref],
   ];
-  sections.push({ id: "details", name: "Details", extra: task ? `${task.title} · ${task.cwd}` : `${run.task_id} (removed)`, kind: "mono",
+  sections.push({ id: "details", name: "Details", extra: task ? `${task.title} · ${task.cwd}` : `${run.task_id} (${detail.taskError ? "couldn't read the task" : "removed"})`, kind: "mono",
     lines: rows.map(([k, v]) => `${k.padEnd(9)} ${v}`), open: false });
 
   if (run.attempts?.length) {
@@ -591,7 +630,7 @@ function eventTime(at, run, now) {
   const ms = parse(at);
   if (ms === null) return String(at ?? "");
   const slot = parse(run.slot);
-  return slot !== null && sameDay(ms, slot) ? clock(ms, true) : `${when(ms, now)}:${pad2(new Date(ms).getSeconds())}`;
+  return slot !== null && sameDay(ms, slot) ? clock(ms, true) : `${formatWhen(ms, now)}:${pad2(new Date(ms).getSeconds())}`;
 }
 
 const absolute = (path, dir) => (!path || path.startsWith("/") || !dir ? path : `${dir.replace(/\/$/, "")}/${path}`);
@@ -623,7 +662,7 @@ function runDataDir(o, run, log) {
   if (fromSnapshot) return fromSnapshot;
   const rel = run.attempts?.find((a) => a.n === log?.attempt)?.log;
   if (log?.path && rel && !rel.startsWith("/") && log.path.endsWith(`/${rel}`)) return log.path.slice(0, -rel.length - 1);
-  return o.machine ? null : expandHome(DEFAULT_DATA_DIR);
+  return dataDir(o);
 }
 
 // One copy of the dashboard pane: its selection, the selected run's detail,
@@ -642,10 +681,10 @@ export class Dashboard {
   // The sidebar asked for a run (SELECT_KEY): take it.
   takeSelection() {
     const s = shared(SELECT_KEY);
-    if (s?.ref && Number(s.at) > this.seenSelect) {
-      this.seenSelect = Number(s.at);
-      this.select({ kind: "run", id: s.ref });
-    }
+    if (!s?.ref || Number(s.at) <= this.seenSelect) return false;
+    this.seenSelect = Number(s.at);
+    this.select({ kind: "run", id: s.ref });
+    return true;
   }
 
   select(sel) {
@@ -674,37 +713,48 @@ export class Dashboard {
     if (this.detail?.key === key || this.loading === key) return;
     this.loading = key;
     cx.spawn(async (cx) => {
-      // The task (title, folder, retries) changes rarely: read once per run shown.
-      const same = this.detail?.ref === sel.id && this.detail?.task;
-      const [log, show] = await Promise.all([cli(this.o, ["log", sel.id]), same ? null : cli(this.o, ["show", sel.id.split("/")[0]])]);
-      if (this.loading !== key) return;
-      this.loading = null;
-      if (log.error || log.missing) {
-        this.detail = { ref: sel.id, key, error: log.error ?? "agent-tasks not found" };
-        cx.notify();
-        return;
+      try {
+        await this.load(cx, sel.id, key);
+      } catch (e) {
+        if (this.loading === key) this.detail = { ref: sel.id, key, error: String(e?.message ?? e) };
+      } finally {
+        if (this.loading === key) this.loading = null;
       }
-      const runData = log.json.run;
-      const task = show ? show.json?.task ?? null : this.detail.task;
-      const retries = show ? show.json?.resolved?.retries ?? null : this.detail.retries;
-      const taskState = show ? show.json?.state ?? null : this.detail.taskState;
-      const dir = runDataDir(this.o, runData, log.json.log);
-      const output = runData.attempts?.at(-1)?.output;
-      this.detail = { ref: log.json.ref ?? sel.id, key, run: runData, log: log.json.log, task, retries, taskState, dataDir: dir, output: null };
       cx.notify();
-      if (output) {
-        const path = absolute(output, dir);
-        let text = null;
-        try {
-          text = path ? await readTextFile(path, onMachine(this.o)) : null;
-        } catch (e) {
-          text = null;
-        }
-        if (this.detail?.key !== key) return;
-        this.detail = { ...this.detail, output: { path, text: text === null ? null : clean(text) } };
-        cx.notify();
-      }
     });
+  }
+
+  async load(cx, ref, key) {
+    // The task (title, folder, retries) changes rarely: read once per run shown.
+    const prev = this.detail?.ref === ref && this.detail?.run ? this.detail : null;
+    const [log, show] = await Promise.all([cli(this.o, ["log", ref]), prev ? null : cli(this.o, ["show", taskIdOf(ref)])]);
+    if (this.loading !== key) return;
+    if (log.error || log.missing) {
+      this.detail = { ref, key, error: log.error ?? "agent-tasks not found" };
+      return;
+    }
+    const runData = log.json?.run;
+    if (!runData) throw new Error("agent-tasks log printed no run");
+    // `show` failing for another reason than a removed task isn't a removed task.
+    const showError = show?.error && !/not found/i.test(show.error) ? show.error : null;
+    const task = show ? show.json?.task ?? null : prev.task;
+    const retries = show ? show.json?.resolved?.retries ?? null : prev.retries;
+    const taskState = show ? show.json?.state ?? null : prev.taskState;
+    const taskError = show ? showError : prev.taskError;
+    const dir = runDataDir(this.o, runData, log.json.log);
+    const output = lastAttempt(runData)?.output;
+    this.detail = { ref: log.json.ref ?? ref, key, run: runData, log: log.json.log, task, retries, taskState, taskError, dataDir: dir, output: null };
+    if (!output) return;
+    cx.notify();
+    const path = absolute(output, dir);
+    let text = null;
+    try {
+      text = path ? await readTextFile(path, onMachine(this.o)) : null;
+    } catch {
+      // Unreadable: shown as gone.
+    }
+    if (this.detail?.key !== key) return;
+    this.detail = { ...this.detail, output: { path, text: text === null ? null : clean(text) } };
   }
 
   // Runs one CLI action, shows it in the strip, then reads everything again.
@@ -725,7 +775,7 @@ export class Dashboard {
 
   // Terminal: the run's live Herdr terminal, else `agent-tasks attach` in a new tab.
   terminal(runData) {
-    const last = runData.attempts?.at(-1);
+    const last = lastAttempt(runData);
     const live = last?.session?.launcher === "herdr" ? liveTerminal(last.session.handle) : null;
     if (live?.pane) return run("pane.focus", { pane: live.pane });
     if (live) return run("terminal.peek", { terminal: live.address });
@@ -740,25 +790,51 @@ export class Dashboard {
     const sel = this.current(dash);
     const i = list.findIndex((x) => x.sel.kind === sel?.kind && x.sel.id === sel?.id);
     const k = event.keystroke;
+    if (/(^|-)(cmd|ctrl|alt)-/.test(k)) return;
     if (k === "j" || k === "down") return this.moveTo(list[Math.min(list.length - 1, i + 1)], cx);
     if (k === "k" || k === "up") return this.moveTo(list[Math.max(0, i - 1)], cx);
     if (k === "g") return this.moveTo(list[0], cx);
     if (k === "shift-g") return this.moveTo(list.at(-1), cx);
     const actions = this.actions(dash, sel);
     const hit = actions.find((a) => a.key === (event.key_char ?? k));
-    if (hit?.enabled) hit.run(cx, refresh);
+    if (hit) this.press(hit, cx, refresh);
+  }
+
+  // Retry and Run now start an agent: the first press asks, the second runs.
+  press(a, cx, refresh) {
+    if (!a.enabled) return;
+    if (a.confirm && this.confirming !== a.id) {
+      this.confirming = a.id;
+      cx.notify();
+      cx.timer.after(4000, (cx) => {
+        if (this.confirming !== a.id) return;
+        this.confirming = null;
+        cx.notify();
+      });
+      return;
+    }
+    this.confirming = null;
+    a.run(cx, refresh);
   }
 
   moveTo(item, cx) {
     if (!item) return;
     this.select(item.sel);
+    this.syncNow(cx);
+  }
+
+  // After a selection: read the run without waiting for the timer.
+  syncNow(cx) {
+    const dash = snapshot(this.o)?.dash;
+    if (dash) this.sync(cx, dash);
     cx.notify();
   }
 
-  // The buttons above a run (or a task): { id, label, icon, key, enabled, run }.
+  // The buttons above a run (or a task):
+  // { id, label, icon, key, enabled, why (when not), confirm, run }.
   actions(dash, sel) {
     if (!sel) return [];
-    const taskId = sel.kind === "run" ? sel.id.split("/")[0] : sel.id;
+    const taskId = sel.kind === "run" ? taskIdOf(sel.id) : sel.id;
     const detail = sel.kind === "run" && this.detail?.ref === sel.id ? this.detail : null;
     const runData = detail?.run ?? null;
     // A task in Next, else what `show` said about the run's task (finished
@@ -768,20 +844,23 @@ export class Dashboard {
     const live = state === "active" || paused;
     const row = sel.kind === "run" ? findRun(dash, sel.id) : null;
     const status = runData?.status ?? row?.status;
-    const session = runData?.attempts?.at(-1)?.session;
+    const session = lastAttempt(runData)?.session;
+    const noTask = state === "archived" ? "The task is archived" : "The task is gone";
     const list = [];
     if (sel.kind === "run") {
       list.push({ id: "terminal", label: "Terminal", icon: "terminal", key: "a",
         enabled: Boolean(runData && (IN_PROGRESS.includes(status) || (session && !session.closed_at))),
+        why: "Its session is closed: read its log below",
         run: () => this.terminal(runData) });
-      list.push({ id: "retry", label: "Retry", icon: "rotate-ccw", key: "r", enabled: RETRYABLE.includes(status),
+      list.push({ id: "retry", label: "Retry", icon: "rotate-ccw", key: "r", enabled: RETRYABLE.includes(status), confirm: true,
+        why: "Only failed, timed-out and missed runs can be retried",
         run: (cx, refresh) => this.act(cx, ["retry", sel.id], refresh) });
     }
-    list.push({ id: "run-now", label: "Run now", icon: "play", key: "R", enabled: Boolean(state) && state !== "archived",
-      run: (cx, refresh) => this.act(cx, ["run", taskId], refresh) });
+    list.push({ id: "run-now", label: "Run now", icon: "play", key: "R", enabled: Boolean(state) && state !== "archived", confirm: true,
+      why: noTask, run: (cx, refresh) => this.act(cx, ["run", taskId], refresh) });
     list.push({ id: "pause", label: paused ? "Resume" : "Pause", icon: paused ? "play" : "pause", key: "p", enabled: live,
-      run: (cx, refresh) => this.act(cx, [paused ? "resume" : "pause", taskId], refresh) });
-    return list;
+      why: noTask, run: (cx, refresh) => this.act(cx, [paused ? "resume" : "pause", taskId], refresh) });
+    return list.map((a) => (this.confirming === a.id ? { ...a, label: `Confirm ${a.label.toLowerCase()}` } : a));
   }
 }
 
@@ -806,7 +885,7 @@ function paneGroupHeader(t, o, id, name, count, open) {
     .child(chevron(o, open, 10, t.dim));
 }
 
-function paneRow(t, view, cx, entry, selected, now) {
+function paneRow(t, view, entry, selected, now) {
   const { group, item, sel } = entry;
   const m = rowMark(t, group, item);
   const right = rowRight(t, group, item, now);
@@ -816,7 +895,7 @@ function paneRow(t, view, cx, entry, selected, now) {
     .tooltip(rowTip(group, item))
     .on_click((_e, cx) => {
       view.select(sel);
-      cx.notify();
+      view.syncNow(cx);
     })
     .child(div().w(12).flex_none().text_color(m.color).child(m.glyph))
     .child(div().flex_1().min_w(0).truncate().text_color(t.foreground).child(item.task_id))
@@ -864,7 +943,7 @@ function eventsList(t, o, dash) {
       }))));
 }
 
-function leftColumn(t, view, cx, st, now) {
+function leftColumn(t, view, st, now) {
   const o = view.o;
   const dash = st?.dash;
   const dim = Boolean(st?.error || st?.missing || st?.schema != null);
@@ -880,43 +959,39 @@ function leftColumn(t, view, cx, st, now) {
     return col.when(!st?.missing && st?.schema == null && !st?.error, (el) => el.child(div().px(16).py(6).text_size(12).text_color(t.dim).child("Loading…")));
   }
   const items = paneItems(dash);
-  const groups = [
-    { id: "running", name: "Running" },
-    { id: "next", name: "Next" },
-    { id: "recent", name: "Recent" },
-  ].map((g) => ({ ...g, items: items.filter((x) => x.group === g.id) })).filter((g) => g.items.length > 0);
-  const due = pastDue(dash);
+  const groups = withItems(dash, (id) => items.filter((x) => x.group === id));
   return col
     .child(v_flex().flex_none().px(6).when(dim, (el) => el.opacity(0.55))
       .child(runnerLine(t, dash, now, { h: 26, size: 12.5 }))
       .when(stopped(dash), (el) => el
         .child(div().px(10).py(3).text_size(11.5).text_color(t.dim)
-          .child(`Nothing starts until it's back.${due ? ` ${due} slot${due === 1 ? "" : "s"} past due.` : ""}`))
+          .child(stoppedNote(dash)))
         .child(runnerButton(t, o, "agent-tasks-pane-start-runner")))
       .child(todayLine(t, dash, true)))
     .child(v_flex().flex_1().min_h(0).px(6).pt(4).pb(8).overflow_y_scrollbar().when(dim, (el) => el.opacity(0.55))
       .when(isEmpty(dash), (el) => el
-        .child(div().px(10).pt(6).text_size(12).text_color(t.dim).child("Nothing scheduled yet. Ask an agent:"))
-        .child(div().px(10).pt(2).text_size(12).text_color(t.foreground).child("“Every Monday at 9, sum up my open PRs.”")))
+        .child(div().px(10).pt(6).text_size(12).text_color(t.dim).child(EMPTY_HINT[0]))
+        .child(div().px(10).pt(2).text_size(12).text_color(t.foreground).child(EMPTY_HINT[1])))
       .children(groups.map((g) => {
         const open = !isFolded(PANE_GROUPS_KEY, g.id);
         return v_flex()
           .child(paneGroupHeader(t, o, g.id, g.name, g.items.length, open))
-          .when(open, (el) => el.children(g.items.map((x) => paneRow(t, view, cx, x, sel?.kind === x.sel.kind && sel?.id === x.sel.id, now))));
+          .when(open, (el) => el.children(g.items.map((x) => paneRow(t, view, x, sel?.kind === x.sel.kind && sel?.id === x.sel.id, now))));
       })))
     .child(eventsList(t, o, dash));
 }
 
-function actionButton(t, o, a, cx, refresh) {
+function actionButton(t, view, a, refresh) {
+  const asking = view.confirming === a.id;
   return h_flex().id(`agent-tasks-action-${a.id}`).h(26).px(8).gap(6).items_center().rounded(6).text_size(11.5)
-    .text_color(a.enabled ? t.dim : t.dim).when(!a.enabled, (el) => el.opacity(0.4))
-    .when(a.enabled, (el) => el.cursor_pointer().hover((s) => s.bg(t.hover).text_color(t.foreground)).on_click((_e, cx) => a.run(cx, refresh)))
-    .child(icon(o, a.icon, 12, t.dim))
+    .text_color(asking ? t.ansi3 : t.dim).when(!a.enabled, (el) => el.opacity(0.4).tooltip(a.why))
+    .when(a.enabled, (el) => el.cursor_pointer().hover((s) => s.bg(t.hover).text_color(t.foreground)).on_click((_e, cx) => view.press(a, cx, refresh)))
+    .child(icon(view.o, a.icon, 12, asking ? t.ansi3 : t.dim))
     .child(div().child(a.label))
     .child(div().px(4).rounded(3).border(1).border_color(t.border).text_size(10).font_family(MONO).text_color(t.dim).child(a.key));
 }
 
-function sectionView(t, o, view, cx, s) {
+function sectionView(t, o, view, s) {
   const open = view.folds[s.id] ?? s.open;
   const header = h_flex().id(`agent-tasks-section-${s.id}`).h(26).px(10).gap(8).items_center().rounded(6).cursor_pointer()
     .hover((st) => st.bg(t.hover))
@@ -941,7 +1016,7 @@ function sectionView(t, o, view, cx, s) {
   return v_flex().child(header).child(body);
 }
 
-function rightColumn(t, view, cx, st, now, refresh) {
+function rightColumn(t, view, st, now, refresh) {
   const o = view.o;
   const dash = st?.dash;
   const sel = dash ? view.current(dash) : null;
@@ -949,27 +1024,27 @@ function rightColumn(t, view, cx, st, now, refresh) {
   if (!dash) return empty("");
   if (!sel) return empty("Nothing to show yet.");
   const actions = view.actions(dash, sel);
-  const buttons = h_flex().flex_none().gap(2).items_center().children(actions.map((a) => actionButton(t, o, a, cx, refresh)));
+  const buttons = h_flex().flex_none().gap(2).items_center().children(actions.map((a) => actionButton(t, view, a, refresh)));
   let head, meta, sections = [];
   if (sel.kind === "task") {
     const task = findTask(dash, sel.id);
     const m = mark(t, task?.state === "paused" ? "paused" : "next");
     head = [m, sel.id, task?.state === "paused" ? "paused" : "next", t.dim];
-    meta = task ? [task.title, task.schedule, task.at ? `next ${when(parse(task.at), now)}` : "paused", task.machine].filter(Boolean).join(" · ") : "";
+    meta = task ? [task.title, task.schedule, task.at ? `next ${formatWhen(parse(task.at), now)}` : "paused", task.machine].filter(Boolean).join(" · ") : "";
   } else {
     const d = view.detail?.ref === sel.id ? view.detail : null;
     const row = findRun(dash, sel.id);
     const status = d?.run?.status ?? row?.status ?? "?";
     const m = mark(t, status);
-    head = [m, sel.id.split("/")[0], statusWord(status), m.color];
-    const last = d?.run?.attempts?.at(-1);
+    head = [m, taskIdOf(sel.id), statusWord(status), m.color];
+    const last = lastAttempt(d?.run);
     const started = parse(last?.started_at ?? row?.started_at);
     const finished = parse(last?.finished_at ?? row?.finished_at);
     const n = d?.run?.attempts?.length ?? row?.attempt ?? 0;
     const max = d?.retries != null ? d.retries + 1 : d?.task?.retries != null ? d.task.retries + 1 : null;
     const session = last?.session;
     meta = [
-      started ? `Started ${when(started, now)}` : `Slot ${when(parse(row?.slot ?? d?.run?.slot) ?? now, now)}`,
+      started ? `Started ${formatWhen(started, now)}` : `Slot ${formatWhen(parse(row?.slot ?? d?.run?.slot) ?? now, now)}`,
       started ? span((finished ?? now) - started) : null,
       n ? `attempt ${n}${max ? `/${Math.max(max, n)}` : ""}` : null,
       row?.machine ?? null,
@@ -977,7 +1052,7 @@ function rightColumn(t, view, cx, st, now, refresh) {
     ].filter(Boolean).join(" · ");
     if (d?.error) sections = [div().px(10).py(6).text_size(12).text_color(t.ansi3).child(`Couldn't read the run: ${d.error}`)];
     else if (!d?.run) sections = [div().px(10).py(6).text_size(12).text_color(t.dim).child("Loading…")];
-    else sections = sectionsOf(d, dash, now).map((s) => sectionView(t, o, view, cx, s));
+    else sections = sectionsOf(d, dash, now).map((s) => sectionView(t, o, view, s));
   }
   const [m, title, word, color] = head;
   const strip = view.action;
@@ -999,12 +1074,22 @@ function rightColumn(t, view, cx, st, now, refresh) {
 }
 
 // The dashboard pane: the lists on the left, the selected run on the right.
-export function dashboardPaneView(t, view, cx, refresh) {
+// Keeps a pane's selected run read: now, and twice a second (cheap: it only
+// reads the CLI when the run changed in the snapshot or was selected).
+export function startDashboard(cx, view) {
+  const step = (cx) => {
+    const dash = snapshot(view.o)?.dash;
+    if (view.takeSelection()) cx.notify();
+    if (dash) view.sync(cx, dash);
+  };
+  step(cx);
+  cx.timer.every(500, step);
+}
+
+export function dashboardPaneView(t, view, refresh) {
   const now = Date.now();
   const st = snapshot(view.o);
-  view.takeSelection();
-  if (st?.dash) view.sync(cx, st.dash);
   return h_flex().size_full().min_h(0).text_color(t.foreground)
-    .child(leftColumn(t, view, cx, st, now))
-    .child(rightColumn(t, view, cx, st, now, refresh));
+    .child(leftColumn(t, view, st, now))
+    .child(rightColumn(t, view, st, now, refresh));
 }
