@@ -463,19 +463,19 @@ export function panelHeight(o) {
   return PAD_TOP + HEADER + 1 + sidebarLines(o, snapshot(o)).reduce((h, l) => h + l.h, 0) + PAD_BOTTOM;
 }
 
-function runnerLine(t, dash, now, { h, size }) {
+function runnerLine(t, dash, now, { h, size, small = 10.5, px = 10 }) {
   const r = dash.runner ?? {};
   const healthy = r.state === "healthy";
   const last = parse(r.last_tick);
   const next = parse(r.next_tick);
   const tip = last ? `Last tick ${formatWhen(last, now)}:${pad2(new Date(last).getSeconds())}` : "The runner has never ticked";
   const right = healthy ? (next ? `next ${clock(next)}` : "") : last ? `${span(now - last)} ago` : "never ran";
-  return h_flex().id("agent-tasks-runner").h(h).px(10).gap(7).items_center().tooltip(tip)
+  return h_flex().id("agent-tasks-runner").h(h).px(px).gap(7).items_center().tooltip(tip)
     .child(dot(healthy ? t.ansi2 : t.ansi1))
     .child(div().text_size(size).text_color(t.foreground).child("Runner"))
     .child(badge(t, healthy ? `every ${r.every ?? "?"}` : "stopped", healthy ? t.dim : t.ansi1))
     .child(div().flex_1())
-    .child(div().flex_none().text_size(10.5).text_color(healthy ? t.dim : t.ansi1).child(right));
+    .child(div().flex_none().text_size(small).text_color(healthy ? t.dim : t.ansi1).child(right));
 }
 
 function runnerButton(t, o, id) {
@@ -487,13 +487,13 @@ function runnerButton(t, o, id) {
       .child(div().child("Start runner in a new tab")));
 }
 
-// `■ 3  × 1  □ 0  ! 0`; `wide` spells them out (`3 ok`, `1 failed`).
+// `■ 3  × 1  □ 0  ! 0`; `wide` (the pane) spells them out (`3 ok`, `1 failed`).
 function todayLine(t, dash, wide) {
   const d = dash.today ?? {};
   const item = (glyph, n, word, color) => h_flex().gap(4).items_center().text_color(n > 0 ? color : t.dim)
     .child(div().child(glyph)).child(div().child(wide ? `${n} ${word}` : String(n ?? 0)));
-  return h_flex().h(wide ? 22 : TODAY).px(10).gap(wide ? 12 : 10).items_center().text_size(11)
-    .child(div().w(44).flex_none().text_color(t.dim).child("Today"))
+  return h_flex().h(wide ? PANE_ROW : TODAY).px(wide ? 12 : 10).gap(wide ? 14 : 10).items_center().text_size(wide ? 12 : 11)
+    .child(div().w(wide ? 48 : 44).flex_none().text_color(t.dim).child("Today"))
     .child(item("■", d.succeeded ?? 0, "ok", t.ansi2))
     .child(item("×", d.failed ?? 0, "failed", t.ansi1))
     .child(item("□", d.missed ?? 0, "missed", t.dim))
@@ -912,23 +912,29 @@ function paneItems(dash) {
   ];
 }
 
-const LEFT_W = 380;
+// The pane is for clicking around: roomier than the sidebar.
+const LEFT_W = 420;
+const PANE_ROW = 28;
+const PANE_HEAD = 30;
+const PANE_BUTTON = 30;
+// The open Events panel's share of the pane's height.
+const EVENTS_SHARE = "30%";
 
 function paneGroupHeader(t, o, id, name, count, open) {
-  return h_flex().id(`agent-tasks-pane-group-${id}`).h(26).px(10).gap(6).items_center().rounded(6).cursor_pointer()
-    .text_size(11.5).text_color(t.dim).hover((s) => s.bg(t.hover).text_color(t.foreground))
+  return h_flex().id(`agent-tasks-pane-group-${id}`).h(PANE_HEAD).px(12).gap(7).items_center().rounded(6).cursor_pointer()
+    .text_size(12).text_color(t.dim).hover((s) => s.bg(t.hover).text_color(t.foreground))
     .on_click(() => flip(PANE_GROUPS_KEY, id))
     .child(div().child(name))
-    .child(badge(t, String(count)))
+    .child(badge(t, String(count), t.dim, 11))
     .child(div().flex_1())
-    .child(chevron(o, open, 10, t.dim));
+    .child(chevron(o, open, 12, t.dim));
 }
 
 function paneRow(t, view, entry, selected, now) {
   const { group, item, sel } = entry;
   const m = rowMark(t, group, item);
   const right = rowRight(t, group, item, now);
-  return h_flex().id(`agent-tasks-pane-row-${group}-${sel.id}`).h(22).px(10).gap(8).items_center().rounded(6).cursor_pointer().text_size(12)
+  return h_flex().id(`agent-tasks-pane-row-${group}-${sel.id}`).h(PANE_ROW).px(12).gap(10).items_center().rounded(6).cursor_pointer().text_size(13)
     .when(selected, (el) => el.bg(t.hover))
     .hover((s) => s.bg(t.hover))
     .tooltip(rowTip(group, item))
@@ -936,10 +942,10 @@ function paneRow(t, view, entry, selected, now) {
       view.select(sel);
       view.syncNow(cx);
     })
-    .child(div().w(12).flex_none().text_color(m.color).child(m.glyph))
+    .child(div().w(14).flex_none().text_color(m.color).child(m.glyph))
     .child(div().flex_1().min_w(0).truncate().text_color(t.foreground).child(item.task_id))
-    .when(Boolean(item.machine), (el) => el.child(div().flex_none().text_size(10.5).text_color(t.dim).child(item.machine)))
-    .child(div().w(52).flex_none().flex().justify_end().text_size(10.5).text_color(right.color).child(right.text));
+    .when(Boolean(item.machine), (el) => el.child(div().flex_none().text_size(12).text_color(t.dim).child(item.machine)))
+    .child(div().w(60).flex_none().flex().justify_end().text_size(12).text_color(right.color).child(right.text));
 }
 
 // `14:21:20  ● stopped · …` -> { time, glyph, text }.
@@ -961,24 +967,29 @@ function eventColor(t, glyph, text) {
   return t.dim;
 }
 
-function eventsList(t, o, dash) {
+// Events · runner.log: across the whole pane, under both columns. Open, it
+// takes a fixed share of the height and scrolls; folded, only its header.
+function eventsPanel(t, o, dash) {
   const open = !isFolded(PANE_GROUPS_KEY, "events");
-  const lines = (dash.events ?? []).slice(-60).reverse();
-  return v_flex().flex_none().border_t(1).border_color(t.border).pt(4).pb(6).px(6)
-    .child(h_flex().id("agent-tasks-pane-group-events").h(26).px(10).gap(6).items_center().rounded(6).cursor_pointer()
-      .text_size(11.5).text_color(t.dim).hover((s) => s.bg(t.hover).text_color(t.foreground))
+  const lines = (dash.events ?? []).slice().reverse();
+  return v_flex().flex_none().border_t(1).border_color(t.border).px(8).py(4)
+    .when(open, (el) => el.h(EVENTS_SHARE))
+    .child(h_flex().id("agent-tasks-pane-group-events").flex_none().h(PANE_HEAD).px(12).gap(7).items_center().rounded(6).cursor_pointer()
+      .text_size(12).text_color(t.dim).hover((s) => s.bg(t.hover).text_color(t.foreground))
       .on_click(() => flip(PANE_GROUPS_KEY, "events"))
       .child(div().child("Events"))
       .child(div().child("· runner.log"))
+      .child(badge(t, String(lines.length), t.dim, 11))
       .child(div().flex_1())
-      .child(chevron(o, open, 10, t.dim)))
-    .when(open, (el) => el.child(v_flex().max_h(220).overflow_y_scrollbar()
+      .child(chevron(o, open, 12, t.dim)))
+    .when(open, (el) => el.child(v_flex().flex_1().min_h(0).overflow_y_scrollbar()
       .children(lines.map((line, i) => {
         const e = eventParts(line);
-        return h_flex().id(`agent-tasks-event-${i}`).h(20).px(10).gap(8).items_center().text_size(11).tooltip(line)
-          .child(div().w(52).flex_none().text_color(t.dim).child(e.time))
-          .child(div().w(10).flex_none().text_color(eventColor(t, e.glyph, e.text)).child(e.glyph))
-          .child(div().flex_1().min_w(0).truncate().text_color(t.foreground).child(e.text));
+        // The whole line: it wraps instead of being cut.
+        return h_flex().id(`agent-tasks-event-${i}`).min_h(24).py(3).px(12).gap(10).items_start().text_size(12)
+          .child(div().w(64).flex_none().text_color(t.dim).child(e.time))
+          .child(div().w(14).flex_none().text_color(eventColor(t, e.glyph, e.text)).child(e.glyph))
+          .child(div().flex_1().min_w(0).text_color(t.foreground).child(e.text));
       }))));
 }
 
@@ -993,7 +1004,7 @@ function leftColumn(t, view, st, now) {
       .child(div().text_size(13).font_semibold().text_color(t.foreground).child("agent-tasks top"))
       .child(div().flex_1())
       .when(Boolean(problem), (el) => el.child(div().id("agent-tasks-pane-problem").text_size(12).font_bold().text_color(t.dim).tooltip(problem).child("!"))))
-    .children(banners(st).map((b, i) => div().px(6).child(bannerLine(t, b, 22, 11.5, `agent-tasks-pane-banner-${i}`))));
+    .children(banners(st).map((b, i) => div().px(6).child(bannerLine(t, b, PANE_ROW, 12, `agent-tasks-pane-banner-${i}`))));
   if (!dash) {
     return col.when(!st?.missing && st?.schema == null && !st?.error, (el) => el.child(div().px(16).py(6).text_size(12).text_color(t.dim).child("Loading…")));
   }
@@ -1001,55 +1012,54 @@ function leftColumn(t, view, st, now) {
   const groups = withItems(dash, (id) => items.filter((x) => x.group === id));
   return col
     .child(v_flex().flex_none().px(6).when(dim, (el) => el.opacity(0.55))
-      .child(runnerLine(t, dash, now, { h: 26, size: 12.5 }))
+      .child(runnerLine(t, dash, now, { h: PANE_HEAD, size: 13, small: 12, px: 12 }))
       .when(stopped(dash), (el) => el
-        .child(div().px(10).py(3).text_size(11.5).text_color(t.dim)
+        .child(div().px(12).py(4).text_size(12).text_color(t.dim)
           .child(stoppedNote(dash)))
         .child(runnerButton(t, o, "agent-tasks-pane-start-runner")))
       .child(todayLine(t, dash, true)))
     .child(v_flex().flex_1().min_h(0).px(6).pt(4).pb(8).overflow_y_scrollbar().when(dim, (el) => el.opacity(0.55))
       .when(isEmpty(dash), (el) => el
-        .child(div().px(10).pt(6).text_size(12).text_color(t.dim).child(EMPTY_HINT[0]))
-        .child(div().px(10).pt(2).text_size(12).text_color(t.foreground).child(EMPTY_HINT[1])))
+        .child(div().px(12).pt(6).text_size(13).text_color(t.dim).child(EMPTY_HINT[0]))
+        .child(div().px(12).pt(2).text_size(13).text_color(t.foreground).child(EMPTY_HINT[1])))
       .children(groups.map((g) => {
         const open = !isFolded(PANE_GROUPS_KEY, g.id);
         return v_flex()
           .child(paneGroupHeader(t, o, g.id, g.name, g.items.length, open))
           .when(open, (el) => el.children(g.items.map((x) => paneRow(t, view, x, sel?.kind === x.sel.kind && sel?.id === x.sel.id, now))));
-      })))
-    .child(eventsList(t, o, dash));
+      })));
 }
 
 function actionButton(t, view, a, refresh) {
   const asking = view.confirming === a.id;
-  return h_flex().id(`agent-tasks-action-${a.id}`).h(26).px(8).gap(6).items_center().rounded(6).text_size(11.5)
+  return h_flex().id(`agent-tasks-action-${a.id}`).h(PANE_BUTTON).px(10).gap(7).items_center().rounded(6).text_size(12.5)
     .text_color(asking ? t.ansi3 : t.dim).when(!a.enabled, (el) => el.opacity(0.4).tooltip(a.why))
     .when(a.enabled, (el) => el.cursor_pointer().hover((s) => s.bg(t.hover).text_color(t.foreground)).on_click((_e, cx) => view.press(a, cx, refresh)))
-    .child(icon(view.o, a.icon, 12, asking ? t.ansi3 : t.dim))
+    .child(icon(view.o, a.icon, 13, asking ? t.ansi3 : t.dim))
     .child(div().child(a.label))
-    .child(div().px(4).rounded(3).border(1).border_color(t.border).text_size(10).font_family(MONO).text_color(t.dim).child(a.key));
+    .child(div().px(5).rounded(3).border(1).border_color(t.border).text_size(10.5).font_family(MONO).text_color(t.dim).child(a.key));
 }
 
 function sectionView(t, o, view, s) {
   const open = view.folds[s.id] ?? s.open;
-  const header = h_flex().id(`agent-tasks-section-${s.id}`).h(26).px(10).gap(8).items_center().rounded(6).cursor_pointer()
+  const header = h_flex().id(`agent-tasks-section-${s.id}`).h(PANE_HEAD).px(12).gap(10).items_center().rounded(6).cursor_pointer()
     .hover((st) => st.bg(t.hover))
     .on_click((_e, cx) => {
       view.folds[s.id] = !open;
       cx.notify();
     })
-    .child(div().flex_none().text_size(12.5).font_medium().text_color(t.foreground).child(s.name))
-    .child(div().flex_1().min_w(0).truncate().text_size(11.5).text_color(t.dim).child(s.extra))
-    .child(chevron(o, open, 11, t.dim));
+    .child(div().flex_none().text_size(13).font_medium().text_color(t.foreground).child(s.name))
+    .child(div().flex_1().min_w(0).truncate().text_size(12).text_color(t.dim).child(s.extra))
+    .child(chevron(o, open, 12, t.dim));
   if (!open) return header;
   let body;
   if (s.kind === "text") {
-    body = v_flex().px(10).pt(2).pb(8).gap(6)
+    body = v_flex().px(12).pt(2).pb(10).gap(6)
       .when(Boolean(s.facts), (el) => el.child(div().text_size(11.5).text_color(t.dim).child(s.facts)))
       .when(s.text != null, (el) => el.children(clean(s.text).split("\n").map((l) => div().text_size(13).text_color(t.foreground).child(l || " "))))
       .when(Boolean(s.note), (el) => el.child(div().text_size(12.5).text_color(t.dim).child(s.note)));
   } else {
-    body = div().px(10).pt(2).pb(8).child(v_flex().p(10).rounded(6).bg(t.raised ?? t.hover).font_family(MONO).text_size(11.5).text_color(t.foreground)
+    body = div().px(12).pt(2).pb(10).child(v_flex().p(10).rounded(6).bg(t.raised ?? t.hover).font_family(MONO).text_size(11.5).text_color(t.foreground)
       .children(s.lines.map((l) => div().child(l || " "))));
   }
   return v_flex().child(header).child(body);
@@ -1096,16 +1106,16 @@ function rightColumn(t, view, st, now, refresh) {
   const [m, title, word, color] = head;
   const strip = view.action;
   return v_flex().flex_1().min_w(0).h_full().min_h(0)
-    .child(v_flex().flex_none().px(20).pt(12).pb(10).gap(4)
+    .child(v_flex().flex_none().px(22).pt(12).pb(10).gap(6)
       .child(h_flex().gap(8).items_center()
         .child(div().flex_none().text_size(14).text_color(m.color).child(m.glyph))
         .child(div().min_w(0).truncate().text_size(14).font_semibold().text_color(t.foreground).child(title))
-        .child(div().flex_none().px(6).rounded(4).bg(t.hover).text_size(10.5).text_color(color).child(word))
+        .child(div().flex_none().px(6).rounded(4).bg(t.hover).text_size(11).text_color(color).child(word))
         .child(div().flex_1())
         .child(buttons))
-      .child(div().min_w(0).truncate().text_size(11.5).text_color(t.dim).child(meta)))
+      .child(div().min_w(0).truncate().text_size(12).text_color(t.dim).child(meta)))
     .child(v_flex().flex_1().min_h(0).px(10).pb(12).gap(2).overflow_y_scrollbar().children(sections))
-    .when(Boolean(strip), (el) => el.child(h_flex().flex_none().h(28).px(20).gap(8).items_center().border_t(1).border_color(t.border).text_size(11.5)
+    .when(Boolean(strip), (el) => el.child(h_flex().flex_none().h(PANE_ROW).px(22).gap(8).items_center().border_t(1).border_color(t.border).text_size(11.5)
       .child(div().flex_none().font_family(MONO).text_color(t.dim).child(strip.command))
       .child(div().flex_1().min_w(0).truncate().text_color(strip.state === "error" ? t.ansi1 : strip.state === "running" ? t.dim : t.ansi2)
         .when(Boolean(strip.message), (el) => el.tooltip(strip.message))
@@ -1129,7 +1139,9 @@ export function startDashboard(cx, view) {
 export function dashboardPaneView(t, view, refresh) {
   const now = Date.now();
   const st = snapshot(view.o);
-  return h_flex().size_full().min_h(0).text_color(t.foreground)
-    .child(leftColumn(t, view, st, now))
-    .child(rightColumn(t, view, st, now, refresh));
+  return v_flex().size_full().min_h(0).text_color(t.foreground)
+    .child(h_flex().flex_1().min_h(0)
+      .child(leftColumn(t, view, st, now))
+      .child(rightColumn(t, view, st, now, refresh)))
+    .when(Boolean(st?.dash), (el) => el.child(eventsPanel(t, view.o, st.dash)));
 }

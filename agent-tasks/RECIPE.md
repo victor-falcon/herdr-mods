@@ -44,20 +44,28 @@ something needs you.
 
 ### The dashboard pane (`agent-tasks top`)
 
-- **Left (380px, a `border` line on its right):** the runner line, today's
-  counts spelled out (`3 ok`, `1 failed`, `0 missed`, `0 blocked`), then the
-  foldable Running / Next / Recent groups (26px `dim` headers with a count
-  badge and a chevron; rows 22px, 12px, with the machine in 10.5px `dim` and a
-  52px right column). The selected row has a `hover` background. At the
-  bottom, a foldable `Events · runner.log` list (the newest first; 20px rows,
-  11px: time, glyph, text; hover for the whole line).
+Roomier than the sidebar block: it is for clicking around. Hover and the
+selection cover the whole row, with rounded corners (radius 6).
+
+- **Left (420px, a `border` line on its right):** the runner line (30px,
+  13px), today's counts spelled out (28px, 12px: `3 ok`, `1 failed`,
+  `0 missed`, `0 blocked`), then the foldable Running / Next / Recent groups
+  (30px `dim` headers, 12px, with a count badge and a chevron). Rows are
+  28px with 12px side padding: the task id at 13px, then the machine and a
+  60px right column at 12px `dim`. The selected row has a `hover` background.
 - **Right: the selected run.** Its glyph, the task id (14px semibold), a
-  status badge (10.5px, the status color on `hover`), and ghost buttons
-  (26px, 11.5px `dim`, icon, label and key): **Terminal** (`a`), **Retry**
-  (`r`), **Run now** (`R`), **Pause** / **Resume** (`p`). Below, 11.5px `dim`:
+  status badge (11px, the status color on `hover`), and ghost buttons
+  (30px, 12.5px `dim`, icon, label and key): **Terminal** (`a`), **Retry**
+  (`r`), **Run now** (`R`), **Pause** / **Resume** (`p`). Below, 12px `dim`:
   `Started 10:57 · 11m · attempt 2/2 · wsl · herdr t38`.
-- Then foldable sections (26px headers: the name in `foreground` 500, what is
-  inside in `dim`, a chevron), the same as `agent-tasks top`'s run view:
+- **Bottom, across both columns: `Events · runner.log`.** A 30px header
+  (name, count badge, chevron) folds it. The fold is shared in
+  `agent-tasks.paneGroups`. Open, it takes 30% of the pane's height and
+  scrolls: the newest line first, 12px, with the time, the glyph and the
+  whole text, which wraps instead of being cut. Folded, only the header
+  shows and the columns get the room.
+- Then foldable sections (30px headers: the name at 13px in `foreground` 500,
+  what is inside at 12px in `dim`, a chevron), the same as `agent-tasks top`'s run view:
   **Result** (status, slot, how long, and the agent's summary) and **Output**
   (the file passed to `finish --output-file`) open when there is a result;
   **Details**, **Attempts**, **Events** folded; **Log** (the last 400 lines)
