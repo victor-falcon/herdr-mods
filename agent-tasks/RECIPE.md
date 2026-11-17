@@ -10,6 +10,28 @@ something needs you.
 
 ![Agent tasks](preview.png)
 
+## Requirements
+
+The mod is only a view: everything it shows and does comes from the
+agent-tasks CLI, which has to be set up first.
+
+- **The [agent-tasks](https://github.com/victor-falcon/agent-tasks) CLI,
+  installed** on the machine Herdr reaches, and on that machine's login PATH
+  (Herdr starts programs with your login environment). Run
+  `bin/agent-tasks install` in its checkout to link it into your bin folder.
+- **A recent version**, one that has `agent-tasks top`. The mod reads
+  `top --json`, plus `log`, `show` and `version`. `data_dir` in
+  `top --json` (agent-tasks #23) lets it watch the right data folder; older
+  CLIs fall back to `~/.local/share/agent-tasks`.
+- **At least one task configured** (ask an agent to schedule one, or
+  `agent-tasks add`), and **a runner running** (`agent-tasks runner`, in a
+  terminal that stays open). Without a runner, nothing starts: the panel
+  says so and offers a button that runs it in a new tab.
+- **Which machine.** `props.machine` (a Herdr machine name) wins when set.
+  Otherwise the mod uses this computer if `agent-tasks version` works there,
+  else the first ready machine (`machines()`) where it does, and remembers
+  the choice. Found nowhere, it shows the CLI-not-found state.
+
 ## What you see
 
 ### The sidebar panel (a layout block, about 280px wide)
@@ -86,7 +108,9 @@ selection cover the whole row, with rounded corners (radius 6).
 - **Runner stopped:** the red dot and the message and button above.
 - **No tasks yet:** `Nothing scheduled yet. Ask an agent:` and an example.
 - **CLI not found** (`agent-tasks` isn't on the login PATH): `agent-tasks
-  isn't on your login PATH`, `In its checkout: bin/agent-tasks install`, and a dim `!` in the header.
+  isn't on your login PATH`, a link to the repository (`Get it:
+  github.com/victor-falcon/agent-tasks`, which opens it), `In its checkout:
+  bin/agent-tasks install`, and a dim `!` in the header.
 - **Refresh failed:** a dim `!` in the header (hover: the error), a one-line
   `ansi3` message, and the last good data at 55% opacity.
 - **Unknown schema** (a newer agent-tasks): the same banner, asking to update

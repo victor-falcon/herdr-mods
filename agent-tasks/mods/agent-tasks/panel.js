@@ -21,6 +21,7 @@ const SELECT_KEY = "agent-tasks.select"; // { ref, at }: the sidebar asks the pa
 const MACHINE_KEY = "agent-tasks.machine"; // { machine }: where agent-tasks was found (no props.machine)
 
 const MOD = "agent-tasks";
+const REPO_URL = "https://github.com/victor-falcon/agent-tasks";
 const SCHEMA = 1;
 // DEFAULT_DATA_DIR in agent-tasks' src/paths.ts: watched until the CLI says
 // where its data folder is (`data_dir` in `top --json`).
@@ -307,7 +308,11 @@ const findTask = (dash, id) => (dash?.next ?? []).find((n) => n.task_id === id) 
 // What the sidebar or pane says instead of (or above) the lists.
 // -> [{ kind: "error" | "warn" | "info", text, tip? }]
 function banners(st) {
-  if (st?.missing) return [{ kind: "warn", text: "agent-tasks isn't on your login PATH." }, { kind: "info", text: "In its checkout: bin/agent-tasks install", mono: true }];
+  if (st?.missing) return [
+    { kind: "warn", text: "agent-tasks isn't on your login PATH." },
+    { kind: "info", text: `Get it: ${REPO_URL.replace("https://", "")}`, url: REPO_URL, tip: REPO_URL },
+    { kind: "info", text: "In its checkout: bin/agent-tasks install", mono: true },
+  ];
   if (st?.schema != null) return [{ kind: "warn", text: `agent-tasks speaks schema ${st.schema}: update this mod.` }];
   if (st?.error) return [{ kind: "warn", text: `Couldn't refresh: ${st.error}`, tip: st.error }];
   // Task or run files the CLI couldn't read (`top` says the same).
@@ -403,6 +408,7 @@ function bannerLine(t, b, h, size, id) {
   const color = b.kind === "error" ? t.ansi1 : b.kind === "warn" ? t.ansi3 : t.dim;
   return div().id(id).h(h).px(10).flex().items_center().text_size(size).text_color(color)
     .when(Boolean(b.tip), (el) => el.tooltip(b.tip))
+    .when(Boolean(b.url), (el) => el.cursor_pointer().hover((s) => s.text_color(t.foreground)).on_click((_e, cx) => cx.open_url(b.url)))
     .child(div().min_w(0).truncate().when(Boolean(b.mono), (el) => el.font_family(MONO)).child(b.text));
 }
 
