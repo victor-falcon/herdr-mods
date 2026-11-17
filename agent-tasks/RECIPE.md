@@ -100,8 +100,9 @@ to `ansi4`), so light and dark themes both work.
   `~/.local/share/agent-tasks`), after 0.7 s of quiet and at most every 1.5 s
   (appends to a run's captured log are ignored), every
   minute (relative times and the runner's health move on their own), and
-  after an action. On another machine, where folders can't be watched, every
-  15 seconds.
+  after an action. The folder is watched only if it exists on this computer:
+  with `machine` set, or on a client machine where `top` runs on the hub
+  over SSH (so `data_dir` is the hub's path), only the minute timer reads.
 - The selected run is read with `agent-tasks log <ref> --json` (events,
   attempts, the captured log) and `agent-tasks show <task> --json` (title,
   folder, retries), again when it changes, and every minute while it runs.
@@ -166,7 +167,8 @@ to `ansi4`), so light and dark themes both work.
   that PATH (`bin/agent-tasks install` in its checkout links it there).
 - Retry, Run now and Start runner launch agents and terminals right away, the
   same as typing the command.
-- Folders on another machine can't be watched: there it reads every 15 s.
+- Folders on another machine can't be watched: there it reads once a minute
+  (and after each action), so a change can take up to a minute to show.
 - A block's height is fixed in the layout; that's why the mod resizes its own
   block, and why it needs its id in `props.block`.
 - Asset paths are `mods/agent-tasks/...`: install the folder under that name,

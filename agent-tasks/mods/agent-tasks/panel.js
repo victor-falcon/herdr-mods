@@ -27,8 +27,6 @@ const DEFAULT_DATA_DIR = "~/.local/share/agent-tasks";
 const MINUTE = 60000;
 // A change seen by the watcher is read after this much quiet.
 const DEBOUNCE_MS = 700;
-// Without a watcher (another machine, or the watch failed): read this often.
-const POLL_MS = 15000;
 // Never read more often than this, whatever changes.
 const MIN_GAP_MS = 1500;
 const MONO = "JetBrains Mono";
@@ -120,6 +118,7 @@ export function startTasks(cx, options) {
   let busy = false;
   let changedAt = 0; // a change seen and not read yet
   let watching = false;
+  let checked = null; // the folder last found missing here
   // Claims the read through the shared clock before anything is awaited, so
   // two copies don't both run the CLI.
   const refresh = (cx) => {
@@ -136,21 +135,32 @@ export function startTasks(cx, options) {
       if (!watching) watch(cx);
     });
   };
+  // watchFolder only sees this computer. `data_dir` can be another
+  // machine's path (on a client machine `top` runs on the hub over SSH), so
+  // it is watched only if it exists here; otherwise the minute timer reads.
   const watch = (cx) => {
     const o = options();
     const dir = dataDir(o);
-    // watchFolder only sees this computer.
-    if (o.machine || !dir) return;
+    if (o.machine || !dir || dir === checked) return;
     watching = true;
     cx.spawn(async () => {
+      const here = await exec("test", ["-d", dir]).then((r) => r.code === 0, () => false);
+      if (!here) {
+        checked = dir;
+        watching = false;
+        return;
+      }
       try {
         for (;;) {
-          const paths = await watchFolder(dataDir(options()) ?? dir);
+          const paths = await watchFolder(dir);
           if (relevant(paths)) changedAt = Date.now();
+          // The CLI moved its data folder: watch the new one.
+          if (dataDir(options()) !== dir) break;
         }
       } catch {
-        watching = false; // fall back to polling
+        // Can't watch it: the minute timer reads.
       }
+      watching = false;
     });
   };
   const o = options();
@@ -162,7 +172,6 @@ export function startTasks(cx, options) {
     // Another copy may have read it since the change.
     if (changedAt && fetched >= changedAt) changedAt = 0;
     if (changedAt && Date.now() - changedAt >= DEBOUNCE_MS) return refresh(cx);
-    if (!watching && sinceFetch() >= POLL_MS) refresh(cx);
   });
   cx.timer.every(MINUTE, (cx) => {
     if (sinceFetch() >= MINUTE - 5000) refresh(cx);
