@@ -4,6 +4,7 @@ Mods for the [Herdr](https://herdr.dev) app.
 
 | Mod | What it does |
 |-----|--------------|
+| [agent-tasks](agent-tasks/) | The agent-tasks scheduler in Herdr: a sidebar panel with the runner and runs, and a dashboard pane to read a run and retry, run or pause it. Needs the [agent-tasks](https://github.com/victor-falcon/agent-tasks) CLI. |
 | [agent-wall](agent-wall/) | One key turns every agent in the current space into a wall of panes, and back. |
 | [claude-usage](claude-usage/) | A foldable panel with the usage limits of your Claude accounts, and a red dot when one gets close. |
 | [machine-icons](machine-icons/) | Pick the icon each machine shows in the sidebar: an Apple for your Mac, Tux for a WSL box. |
